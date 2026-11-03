@@ -3,73 +3,100 @@
  */
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
 
+/** Format a price the way the dialog expects, using the decimal separator of its prefilled value. */
+export function formatPrice(price, sample = '') {
+  const plain = Number(price).toFixed(12).replace(/0+$/, '').replace(/\.$/, '');
+  return sample.includes(',') ? plain.replace('.', ',') : plain;
+}
+
+/** Parse a dialog value such as "3,25", "76.550,00" or "76,550.00". */
+export function parsePrice(text) {
+  const s = String(text).trim();
+  const dec = Math.max(s.lastIndexOf(','), s.lastIndexOf('.'));
+  const hasBoth = s.includes(',') && s.includes('.');
+  if (!hasBoth && s.includes('.') && s.split('.').length > 2) return parseFloat(s.replace(/\./g, ''));
+  if (!hasBoth && s.includes(',') && s.split(',').length > 2) return parseFloat(s.replace(/,/g, ''));
+  if (dec < 0) return parseFloat(s);
+  return parseFloat(s.slice(0, dec).replace(/[.,]/g, '') + '.' + s.slice(dec + 1));
+}
+
+const samePrice = (a, b) => Math.abs(a - b) <= Math.abs(b) * 1e-6;
+
+/**
+ * Create a "crossing" price alert on the chart's current symbol through the Alt+A dialog.
+ * Selectors are structural, not text based, so this works in any UI language.
+ * Reports success only after the alert shows up as active in the alerts API.
+ */
 export async function create({ condition, price, message }) {
-  const opened = await evaluate(`
+  if (condition && !/cross/i.test(condition)) {
+    throw new Error(`Unsupported alert condition "${condition}": only crossing alerts can be created`);
+  }
+  const client = await getClient();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const cancel = () => evaluate(`
     (function() {
-      var btn = document.querySelector('[aria-label="Create Alert"]')
-        || document.querySelector('[data-name="alerts"]');
-      if (btn) { btn.click(); return true; }
-      return false;
+      var submit = document.querySelector('form button[type="submit"]');
+      var btn = submit && submit.parentElement.querySelector('button[type="button"]');
+      if (btn) btn.click();
     })()
   `);
 
-  if (!opened) {
-    const client = await getClient();
-    await client.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 1, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
-    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 1, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', modifiers: 1, key: 'a', code: 'KeyA' });
+  await sleep(1500);
+
+  const prefilled = await evaluate(`
+    (function() {
+      var a = document.activeElement;
+      if (!a || a.tagName !== 'INPUT' || !a.closest('form')) return null;
+      a.setAttribute('data-mcp-alert-price', '1');
+      a.select();
+      return a.value;
+    })()
+  `);
+  if (prefilled == null) throw new Error('Alert dialog did not open with its price field focused');
+
+  await client.Input.insertText({ text: formatPrice(price, prefilled) });
+  await sleep(300);
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Tab', code: 'Tab' });
+  await sleep(500);
+
+  const typed = await evaluate(`document.querySelector('[data-mcp-alert-price]')?.value`);
+  if (!samePrice(parsePrice(typed), price)) {
+    await cancel();
+    throw new Error(`Alert price field shows "${typed}" instead of ${price}; alert not created`);
   }
 
-  await new Promise(r => setTimeout(r, 1000));
-
-  const priceSet = await evaluate(`
+  const submitted = await evaluate(`
     (function() {
-      var inputs = document.querySelectorAll('[class*="alert"] input[type="text"], [class*="alert"] input[type="number"]');
-      for (var i = 0; i < inputs.length; i++) {
-        var label = inputs[i].closest('[class*="row"]')?.querySelector('[class*="label"]');
-        if (label && /value|price/i.test(label.textContent)) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-          nativeSet.call(inputs[i], '${price}');
-          inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
-          inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-      }
-      if (inputs.length > 0) {
-        var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        nativeSet.call(inputs[0], '${price}');
-        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      }
-      return false;
+      var input = document.querySelector('[data-mcp-alert-price]');
+      var btn = input && input.closest('form').querySelector('button[type="submit"]');
+      if (!btn) return false;
+      btn.click();
+      return true;
     })()
   `);
+  if (!submitted) {
+    await cancel();
+    throw new Error('Alert submit button not found');
+  }
+  await sleep(1500);
 
-  if (message) {
-    await evaluate(`
-      (function() {
-        var textarea = document.querySelector('[class*="alert"] textarea')
-          || document.querySelector('textarea[placeholder*="message"]');
-        if (textarea) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-          nativeSet.call(textarea, ${JSON.stringify(message)});
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      })()
-    `);
+  const symbol = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value().symbol()`);
+  const { alerts } = await list();
+  const created = alerts.find(a => a.active && a.symbol === symbol
+    && samePrice(a.condition?.series?.[1]?.value ?? NaN, price));
+  if (!created) {
+    await cancel();
+    throw new Error(`Alert for ${symbol} at ${price} was not found after submitting`);
   }
 
-  await new Promise(r => setTimeout(r, 500));
-  const created = await evaluate(`
-    (function() {
-      var btns = document.querySelectorAll('button[data-name="submit"], button');
-      for (var i = 0; i < btns.length; i++) {
-        if (/^create$/i.test(btns[i].textContent.trim())) { btns[i].click(); return true; }
-      }
-      return false;
-    })()
-  `);
-
-  return { success: !!created, price, condition, message: message || '(none)', price_set: !!priceSet, source: 'dom_fallback' };
+  return {
+    success: true, symbol, price, condition: 'crossing', alert_id: created.alert_id,
+    expiration: created.expiration, message: created.message,
+    ...(message ? { message_applied: false, note: 'Custom messages are not supported; the default message was used.' } : {}),
+  };
 }
 
 export async function list() {

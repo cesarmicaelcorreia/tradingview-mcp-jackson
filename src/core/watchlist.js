@@ -70,11 +70,11 @@ export async function add({ symbol }) {
   const panelState = await evaluate(`
     (function() {
       var btn = document.querySelector('[data-name="base-watchlist-widget-button"]')
+        || document.querySelector('[data-name="base"]')
         || document.querySelector('[aria-label*="Watchlist"]');
       if (!btn) return { error: 'Watchlist button not found' };
-      var isActive = btn.getAttribute('aria-pressed') === 'true'
-        || btn.classList.toString().indexOf('Active') !== -1
-        || btn.classList.toString().indexOf('active') !== -1;
+      var pressed = btn.getAttribute('aria-pressed');
+      var isActive = pressed !== null ? pressed === 'true' : /(^|\s)isActive/.test(btn.className);
       if (!isActive) { btn.click(); return { opened: true }; }
       return { opened: false };
     })()

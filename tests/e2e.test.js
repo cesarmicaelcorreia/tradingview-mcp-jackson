@@ -1287,6 +1287,7 @@ val = array.get(a, 5)`;
       await evaluate(`
         (function() {
           var btn = document.querySelector('[data-name="base-watchlist-widget-button"]')
+            || document.querySelector('[data-name="base"]')
             || document.querySelector('[aria-label="Watchlist"]');
           if (btn) btn.click();
         })()

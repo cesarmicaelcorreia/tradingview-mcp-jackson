@@ -59,8 +59,8 @@ export async function openPanel({ panel, action }) {
     return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown' };
   } else {
     const selectorMap = {
-      'watchlist': { dataName: 'base-watchlist-widget-button', ariaLabel: 'Watchlist' },
-      'alerts': { dataName: 'alerts-button', ariaLabel: 'Alerts' },
+      'watchlist': { dataName: 'base', ariaLabel: 'Watchlist' },
+      'alerts': { dataName: 'alerts', ariaLabel: 'Alerts' },
       'trading': { dataName: 'trading-button', ariaLabel: 'Trading Panel' },
     };
     const sel = selectorMap[panel];
@@ -71,7 +71,8 @@ export async function openPanel({ panel, action }) {
         var action = ${JSON.stringify(action)};
         var btn = document.querySelector('[data-name="' + dataName + '"]') || document.querySelector('[aria-label="' + ariaLabel + '"]');
         if (!btn) return { error: 'Button not found for panel: ' + ${JSON.stringify(panel)} };
-        var isActive = btn.getAttribute('aria-pressed') === 'true' || btn.classList.contains('isActive') || btn.classList.toString().indexOf('active') !== -1 || btn.classList.toString().indexOf('Active') !== -1;
+        var pressed = btn.getAttribute('aria-pressed');
+        var isActive = pressed !== null ? pressed === 'true' : /(^|\s)isActive/.test(btn.className);
         var rightArea = document.querySelector('[class*="layout__area--right"]');
         var sidebarOpen = !!(rightArea && rightArea.offsetWidth > 50);
         var isOpen = isActive && sidebarOpen;
