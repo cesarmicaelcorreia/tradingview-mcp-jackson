@@ -132,6 +132,8 @@ async function execute(handler, values, positionals) {
   try {
     const result = await handler(values, positionals);
     console.log(JSON.stringify(result, null, 2));
+    // Node 24 on Windows aborts (UV_HANDLE_CLOSING) if we exit while fetch handles are still closing.
+    await new Promise(r => setTimeout(r, 100));
     process.exit(0);
   } catch (err) {
     handleError(err);

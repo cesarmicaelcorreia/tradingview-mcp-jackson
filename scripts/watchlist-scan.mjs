@@ -4,7 +4,7 @@
  *
  * Walks every watchlist symbol (plus fixed market-context symbols) on W / D / 4H,
  * computes EMA20/50/200, RSI14, ATR14, relative volume, anchored VWAPs and a
- * volume-profile POC from raw bars, and keeps only the useful bits of the chart's
+ * volume-profile POC and Binance perp open interest from raw bars, and keeps only the useful bits of the chart's
  * Pine indicators (MicaTradeGPT signals/table, SMC structure near price).
  *
  * Output: scan-output/digest.txt — one dense line per symbol/TF, small enough for
@@ -145,6 +145,26 @@ async function scanTf(symbol, tf) {
   ].filter(Boolean).join(' | ');
 }
 
+// Open interest comes from Binance perp data symbols, so it needs no indicator slot.
+// A symbol that never loads must not stall the scan, so every step is time limited.
+const withTimeout = (p, ms) => Promise.race([p, sleep(ms).then(() => null)]);
+
+async function scanOi(symbol) {
+  const m = symbol.match(/:([A-Z0-9]+?)USDT(.P)?$/);
+  if (!m) return null;
+  const oiSymbol = `BINANCE:${m[1]}USDT.P_OI`;
+  await safe(() => chart.setTimeframe({ timeframe: "D" }));
+  await withTimeout(safe(() => chart.setSymbol({ symbol: oiSymbol })), 10000);
+  await sleep(2500);
+  const state = await withTimeout(safe(() => chart.getState()), 5000);
+  if (state?.symbol !== oiSymbol) return "OI: no data";
+  const res = await withTimeout(safe(() => data.getOhlcv({ count: 30 })), 8000);
+  const c = (res?.bars || []).map(b => b.close);
+  if (c.length < 8) return "OI: no data";
+  const last = c[c.length - 1];
+  return `OI: ${sig(last)} 1d=${pct(last, c[c.length - 2])} 7d=${pct(last, c[c.length - 8])}`;
+}
+
 // ---------- main ----------
 const argSyms = process.argv[2]?.split(',').filter(Boolean);
 let symbols = argSyms;
@@ -161,6 +181,8 @@ const lines = [`# scan ${new Date().toISOString()} | TFs ${TFS.join(',')} | cont
 for (const [i, sym] of all.entries()) {
   const parts = [];
   for (const tf of TFS) parts.push(await scanTf(sym, tf));
+  const oi = await scanOi(sym);
+  if (oi) parts.push(oi);
   lines.push(`## ${sym}${CONTEXT.includes(sym) ? ' [CONTEXT]' : ''}\n` + parts.map(p => '  ' + p).join('\n'));
   console.error(`[${i + 1}/${all.length}] ${sym}`);
   writeFileSync(join(OUT_DIR, 'digest.txt'), lines.join('\n') + '\n'); // incremental save
