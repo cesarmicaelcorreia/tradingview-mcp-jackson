@@ -122,8 +122,8 @@ async function scanTf(symbol, tf) {
   if (b.length < 20) return `${tf}: no data`;
   const c = b.map(x => x.close), price = c[c.length - 1];
   const last50 = b.slice(-50), last200 = b.slice(-200);
-  const hiIdx = b.length - 200 + last200.reduce((m, x, i, a) => (x.high > a[m].high ? i : m), 0);
-  const loIdx = b.length - 200 + last200.reduce((m, x, i, a) => (x.low < a[m].low ? i : m), 0);
+  const hiIdx = b.length - last200.length + last200.reduce((m, x, i, a) => (x.high > a[m].high ? i : m), 0);
+  const loIdx = b.length - last200.length + last200.reduce((m, x, i, a) => (x.low < a[m].low ? i : m), 0);
   const avgVol = b.slice(-21, -1).reduce((s, x) => s + x.volume, 0) / 20;
   const e20 = ema(c, 20), e50 = ema(c, 50), e200 = ema(c, 200), a = atr(b);
   const swingHi = Math.max(...last50.map(x => x.high)), swingLo = Math.min(...last50.map(x => x.low));
@@ -180,7 +180,9 @@ const startState = await safe(() => chart.getState());
 const lines = [`# scan ${new Date().toISOString()} | TFs ${TFS.join(',')} | context: ${CONTEXT.join(', ')}`];
 for (const [i, sym] of all.entries()) {
   const parts = [];
-  for (const tf of TFS) parts.push(await scanTf(sym, tf));
+  for (const tf of TFS) {
+    try { parts.push(await scanTf(sym, tf)); } catch (e) { parts.push(`${tf}: error ${e.message}`); }
+  }
   const oi = await scanOi(sym);
   if (oi) parts.push(oi);
   lines.push(`## ${sym}${CONTEXT.includes(sym) ? ' [CONTEXT]' : ''}\n` + parts.map(p => '  ' + p).join('\n'));
